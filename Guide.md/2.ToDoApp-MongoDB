@@ -1,0 +1,1104 @@
+# MongoDB Todo App Development
+
+## Build a Full-Stack Todo Application with MongoDB
+
+**Develop and test a complete Todo application locally using Docker Compose.**
+
+## What You’ll Build
+
+- **Todo API** (ASP.NET Core) with JSON/REST endpoints
+- **Web Frontend** (JavaScript) for managing todos
+- **MongoDB** Document database for data persistence
+- **Mongo Express** Admin UI for database inspection
+
+**All running locally with Docker Compose!**
+
+## Prerequisites
+
+- Docker Desktop installed and running
+- Code editor (VS Code recommended)
+- Terminal/command line access (Git Bash recommended for Windows)
+
+**Verify Docker:**
+
+```bash
+docker --version
+docker compose version
+```
+
+**Expected:** Docker 20.10+ and Docker Compose v2+
+
+---
+
+## Understanding the Application
+
+### Architecture
+
+```
+Browser → Todo App (Port 8080) → MongoDB (Port 27017)
+       ↓
+    Mongo Express (Port 8081) → MongoDB
+```
+
+**All containers communicate via Docker network**
+
+### Application Components
+
+**1. Todo WebApp (ASP.NET Core 8.0)**
+
+- Minimal API backend (no controllers)
+- Static file serving for frontend
+- MongoDB driver for database access
+- Configuration via environment variables
+
+**2. Frontend (Vanilla JavaScript)**
+
+- Single HTML file with embedded CSS/JS
+- CRUD operations via Fetch API
+- Modern responsive design
+- No frameworks - just vanilla JavaScript
+
+**3. MongoDB**
+
+- Document database
+- Stores todo items as JSON documents
+- No schema required (NoSQL)
+
+**4. Mongo Express**
+
+- Web-based database admin tool
+- Inspect collections and documents
+- Useful for debugging
+
+### API Endpoints
+
+|Method|Endpoint|Description|
+|---|---|---|
+|GET|`/`|Web UI (index.html)|
+|GET|`/api/todos`|List all todos|
+|GET|`/api/todos/:id`|Get specific todo|
+|POST|`/api/todos`|Create new todo|
+|PUT|`/api/todos/:id`|Update todo|
+|DELETE|`/api/todos/:id`|Delete todo|
+
+---
+
+## Step 1: Project Setup
+
+### Create Project Directory
+
+```bash
+mkdir todo-app
+cd todo-app
+```
+
+### Directory Structure
+
+```text
+todo-app/
+├── docker-compose.yml       # Container orchestration
+├── webapp/                  # ASP.NET Core application
+│   ├── Dockerfile
+│   ├── TodoApp.csproj
+│   ├── Program.cs          # API endpoints
+│   └── wwwroot/
+│       └── index.html      # Frontend UI
+└── init-mongo.js           # Database initialization
+```
+
+---
+
+## Step 2: Create the ASP.NET Core Application
+
+### Create the Project
+
+```bash
+mkdir webapp
+cd webapp
+dotnet new web -n TodoApp
+cd ..
+```
+
+### Program.cs - API Backend
+
+Create `webapp/Program.cs`:
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Driver;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Configure JSON serialization
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+});
+
+// Add MongoDB client
+var mongoHost = Environment.GetEnvironmentVariable("MONGODB_HOST") ?? "localhost";
+var mongoPort = Environment.GetEnvironmentVariable("MONGODB_PORT") ?? "27017";
+var mongoDatabase = Environment.GetEnvironmentVariable("MONGODB_DATABASE") ?? "ToDoAppDb";
+
+var connectionString = $"mongodb://{mongoHost}:{mongoPort}";
+builder.Services.AddSingleton<IMongoClient>(new MongoClient(connectionString));
+builder.Services.AddScoped(sp =>
+{
+    var client = sp.GetRequiredService<IMongoClient>();
+    return client.GetDatabase(mongoDatabase);
+});
+
+var app = builder.Build();
+
+// Serve static files (frontend)
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+// API Endpoints
+app.MapGet("/api/todos", async (IMongoDatabase db) =>
+{
+    var collection = db.GetCollection<TodoItem>("TodoItems");
+    var todos = await collection.Find(_ => true).ToListAsync();
+    return Results.Ok(todos);
+});
+
+app.MapGet("/api/todos/{id}", async (int id, IMongoDatabase db) =>
+{
+    var collection = db.GetCollection<TodoItem>("TodoItems");
+    var todo = await collection.Find(t => t.Id == id).FirstOrDefaultAsync();
+    return todo is not null ? Results.Ok(todo) : Results.NotFound();
+});
+
+app.MapPost("/api/todos", async (TodoItem todo, IMongoDatabase db) =>
+{
+    var collection = db.GetCollection<TodoItem>("TodoItems");
+    await collection.InsertOneAsync(todo);
+    return Results.Created($"/api/todos/{todo.Id}", todo);
+});
+
+app.MapPut("/api/todos/{id}", async (int id, TodoItem updatedTodo, IMongoDatabase db) =>
+{
+    var collection = db.GetCollection<TodoItem>("TodoItems");
+    var existing = await collection.Find(t => t.Id == id).FirstOrDefaultAsync();
+    if (existing == null) return Results.NotFound();
+
+    updatedTodo.Id = id;
+    updatedTodo._id = existing._id; // Preserve MongoDB's ObjectId
+    var result = await collection.ReplaceOneAsync(t => t.Id == id, updatedTodo);
+    return result.ModifiedCount > 0 ? Results.Ok(updatedTodo) : Results.NotFound();
+});
+
+app.MapDelete("/api/todos/{id}", async (int id, IMongoDatabase db) =>
+{
+    var collection = db.GetCollection<TodoItem>("TodoItems");
+    var result = await collection.DeleteOneAsync(t => t.Id == id);
+    return result.DeletedCount > 0 ? Results.Ok() : Results.NotFound();
+});
+
+app.Run();
+
+// Todo model
+public class TodoItem
+{
+    [BsonId]
+    public ObjectId _id { get; set; }
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public bool IsComplete { get; set; }
+}
+```
+
+**Key points:**
+
+- Reads MongoDB connection from environment variables
+- Minimal API (no controllers needed)
+- Static file middleware serves frontend from `wwwroot/`
+- CRUD operations on `TodoItems` collection
+
+### TodoApp.csproj - Dependencies
+
+Update `webapp/TodoApp.csproj`:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MongoDB.Driver" Version="2.28.0" />
+  </ItemGroup>
+
+</Project>
+```
+
+---
+
+## Step 3: Create the Frontend
+
+### Create wwwroot Directory
+
+```bash
+mkdir webapp/wwwroot
+```
+
+### index.html - Web UI
+
+Create `webapp/wwwroot/index.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Todo App</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 500px;
+            padding: 30px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .add-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        .todo-list {
+            list-style: none;
+        }
+        .todo-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            transition: all 0.3s;
+        }
+        .todo-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        .todo-item.completed {
+            opacity: 0.6;
+        }
+        .todo-item.completed .todo-text {
+            text-decoration: line-through;
+            color: #999;
+        }
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        .todo-text {
+            flex: 1;
+            color: #333;
+        }
+        .delete-btn {
+            padding: 8px 16px;
+            background: #dc3545;
+            font-size: 12px;
+        }
+        .delete-btn:hover {
+            background: #c82333;
+        }
+        .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 40px 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📝 My Todo List</h1>
+        <form class="add-form" id="addForm">
+            <input type="text" id="todoInput" placeholder="Add a new todo..." required>
+            <button type="submit">Add</button>
+        </form>
+        <ul class="todo-list" id="todoList"></ul>
+    </div>
+
+    <script>
+        const API_BASE = '/api/todos';
+        let nextId = 3;
+
+        async function loadTodos() {
+            const response = await fetch(API_BASE);
+            const todos = await response.json();
+
+            if (todos.length > 0) {
+                nextId = Math.max(...todos.map(t => t.id)) + 1;
+            }
+
+            renderTodos(todos);
+        }
+
+        function renderTodos(todos) {
+            const list = document.getElementById('todoList');
+
+            if (todos.length === 0) {
+                list.innerHTML = '<div class="empty-state">No todos yet. Add one above!</div>';
+                return;
+            }
+
+            list.innerHTML = todos.map(todo => `
+                <li class="todo-item ${todo.isComplete ? 'completed' : ''}" data-id="${todo.id}">
+                    <input type="checkbox"
+                           ${todo.isComplete ? 'checked' : ''}
+                           data-id="${todo.id}">
+                    <span class="todo-text">${todo.name}</span>
+                    <button class="delete-btn" data-id="${todo.id}">Delete</button>
+                </li>
+            `).join('');
+        }
+
+        async function addTodo(name) {
+            const todo = {
+                id: nextId++,
+                name: name,
+                isComplete: false
+            };
+
+            await fetch(API_BASE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(todo)
+            });
+
+            loadTodos();
+        }
+
+        async function toggleTodo(id, isComplete) {
+            const response = await fetch(`${API_BASE}/${id}`);
+            const todo = await response.json();
+            todo.isComplete = isComplete;
+
+            await fetch(`${API_BASE}/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(todo)
+            });
+
+            loadTodos();
+        }
+
+        async function deleteTodo(id) {
+            await fetch(`${API_BASE}/${id}`, { method: 'DELETE' });
+            loadTodos();
+        }
+
+        // Event delegation for checkbox and delete button
+        document.getElementById('todoList').addEventListener('click', async (e) => {
+            if (e.target.type === 'checkbox') {
+                const id = parseInt(e.target.dataset.id);
+                const isComplete = e.target.checked;
+                await toggleTodo(id, isComplete);
+            } else if (e.target.classList.contains('delete-btn')) {
+                const id = parseInt(e.target.dataset.id);
+                await deleteTodo(id);
+            }
+        });
+
+        document.getElementById('addForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const input = document.getElementById('todoInput');
+            addTodo(input.value);
+            input.value = '';
+        });
+
+        loadTodos();
+    </script>
+</body>
+</html>
+```
+
+**Key features:**
+
+- Modern purple gradient design
+- Real-time UI updates
+- Checkbox to mark complete
+- Delete button
+- Event delegation for dynamic elements
+- Vanilla JavaScript (no frameworks)
+
+---
+
+## Step 4: Create Dockerfile
+
+### webapp/Dockerfile
+
+Create `webapp/Dockerfile`:
+
+```dockerfile
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /source
+
+# Copy project file and restore dependencies
+COPY TodoApp.csproj .
+RUN dotnet restore
+
+# Copy source code and build
+COPY . .
+RUN dotnet publish -c Release -o /app
+
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080
+
+ENTRYPOINT ["dotnet", "TodoApp.dll"]
+```
+
+**Multi-stage build:**
+
+- Stage 1: SDK image builds the application
+- Stage 2: Smaller runtime image runs the application
+- Reduces final image size
+
+---
+
+## Step 5: Initialize MongoDB
+
+### Create init-mongo.js
+
+Create `init-mongo.js` in the root directory:
+
+```javascript
+// Initialize MongoDB database with sample todos
+db = db.getSiblingDB('ToDoAppDb');
+
+db.TodoItems.insertMany([
+    {
+        "Id": 1,
+        "Name": "Learn Kubernetes",
+        "IsComplete": false
+    },
+    {
+        "Id": 2,
+        "Name": "Deploy MongoDB",
+        "IsComplete": true
+    }
+]);
+
+print("Database initialized with sample todos!");
+```
+
+**Purpose:** Seeds the database with 2 sample todos on first run.
+
+---
+
+## Step 6: Create Docker Compose File
+
+### docker-compose.yml
+
+Create `docker-compose.yml` in the root directory:
+
+```yaml
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:latest
+    container_name: todo-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - todo-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Mongo Express Admin UI
+  mongo-express:
+    image: mongo-express:latest
+    container_name: todo-mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: pass
+    networks:
+      - todo-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Todo WebApp
+  webapp:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    container_name: todo-webapp
+    ports:
+      - "8080:8080"
+    environment:
+      MONGODB_HOST: mongodb
+      MONGODB_PORT: "27017"
+      MONGODB_DATABASE: ToDoAppDb
+    networks:
+      - todo-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+# Named volume for MongoDB data persistence
+volumes:
+  mongodb-data:
+
+# Custom network for container communication
+networks:
+  todo-network:
+    driver: bridge
+```
+
+**Key features:**
+
+- **Health checks:** WebApp waits for MongoDB to be ready
+- **Named volume:** Data persists between restarts
+- **Custom network:** Containers can communicate by name
+- **Port mapping:** Access services from host machine
+- **Init script:** Mounted as read-only volume
+
+---
+
+## Step 7: Build and Run
+
+### Start All Services
+
+```bash
+# Build and start in detached mode
+docker compose up -d --build
+```
+
+**What happens:**
+
+1. Builds the webapp Docker image
+2. Pulls MongoDB and Mongo Express images
+3. Creates network and volume
+4. Starts MongoDB
+5. Runs init script
+6. Starts Mongo Express and WebApp
+
+**Watch the logs:**
+
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f webapp
+```
+
+### Verify Services are Running
+
+```bash
+docker compose ps
+```
+
+**Expected output:**
+
+```text
+NAME                IMAGE                  STATUS         PORTS
+todo-mongodb        mongo:latest           Up 30 seconds  0.0.0.0:27017->27017/tcp
+todo-mongo-express  mongo-express:latest   Up 28 seconds  0.0.0.0:8081->8081/tcp
+todo-webapp         webapp                 Up 28 seconds  0.0.0.0:8080->8080/tcp
+```
+
+---
+
+## Step 8: Test the Application
+
+### Access the Todo App
+
+Open in your browser:
+
+```text
+http://localhost:8080
+```
+
+**You should see:**
+
+- Beautiful purple gradient UI
+- Two pre-loaded todos from init script
+- Input field to add new todos
+
+### Test CRUD Operations
+
+**1. Create a Todo:**
+
+- Type “Buy groceries” in the input
+- Click “Add”
+- ✅ New todo appears in the list
+
+**2. Complete a Todo:**
+
+- Click the checkbox next to “Learn Kubernetes”
+- ✅ Text becomes strikethrough and grayed out
+
+**3. Delete a Todo:**
+
+- Click “Delete” button next to any todo
+- ✅ Todo is removed from the list
+
+**4. Verify Persistence:**
+
+- Refresh the page
+- ✅ All todos are still there (data in MongoDB)
+
+### Test API Endpoints Directly
+
+**Get all todos:**
+
+```bash
+curl http://localhost:8080/api/todos
+```
+
+**Expected response:**
+
+```json
+[
+  {"id":1,"name":"Learn Kubernetes","isComplete":false},
+  {"id":2,"name":"Deploy MongoDB","isComplete":true}
+]
+```
+
+**Create a todo:**
+
+```bash
+curl -X POST http://localhost:8080/api/todos \
+  -H "Content-Type: application/json" \
+  -d '{"id":3,"name":"Test API","isComplete":false}'
+```
+
+**Update a todo:**
+
+```bash
+curl -X PUT http://localhost:8080/api/todos/1 \
+  -H "Content-Type: application/json" \
+  -d '{"id":1,"name":"Learn Kubernetes","isComplete":true}'
+```
+
+**Delete a todo:**
+
+```bash
+curl -X DELETE http://localhost:8080/api/todos/3
+```
+
+### Access Mongo Express
+
+Open in your browser:
+
+```text
+http://localhost:8081
+```
+
+**Login:**
+
+- Username: `admin`
+- Password: `pass`
+
+**Explore the database:**
+
+1. Click `ToDoAppDb` database
+2. Click `TodoItems` collection
+3. See all todos stored as MongoDB documents
+
+**Notice:**
+
+- Each document has `_id` (MongoDB’s internal ID)
+- And `Id` (our application’s ID)
+- Documents stored as JSON/BSON
+
+---
+
+## Step 9: Development Workflow
+
+### Making Changes to the Code
+
+**1. Stop the webapp container:**
+
+```bash
+docker compose stop webapp
+```
+
+**2. Edit your code** (e.g., `webapp/Program.cs` or `webapp/wwwroot/index.html`)
+
+**3. Rebuild and restart:**
+
+```bash
+docker compose up -d --build webapp
+```
+
+**4. Test your changes** at `http://localhost:8080`
+
+### Hot Reload Development (Optional)
+
+For faster development, run webapp locally without Docker:
+
+**Terminal 1 - MongoDB and Mongo Express via Docker:**
+
+```bash
+docker compose up mongodb mongo-express
+```
+
+**Terminal 2 - WebApp with hot reload:**
+
+```bash
+cd webapp
+export MONGODB_HOST=localhost
+export MONGODB_PORT=27017
+export MONGODB_DATABASE=ToDoAppDb
+dotnet watch run
+```
+
+**Benefits:**
+
+- Code changes auto-reload
+- Faster iteration
+- Full debugging support
+
+---
+
+## Step 10: Data Persistence
+
+### Verify Data Survives Restarts
+
+**1. Add some todos** via the web UI
+
+**2. Stop all services:**
+
+```bash
+docker compose down
+```
+
+**Note:** Using `down` stops and removes containers, but NOT volumes!
+
+**3. Start services again:**
+
+```bash
+docker compose up -d
+```
+
+**4. Open the app** at `http://localhost:8080`
+
+✅ **Your todos are still there!** Data persisted in the `mongodb-data` volume.
+
+### Reset Database (Delete Volume)
+
+**To start fresh:**
+
+```bash
+# Stop and remove containers + volumes
+docker compose down -v
+
+# Start again (runs init script)
+docker compose up -d
+```
+
+The `-v` flag removes volumes, so you’ll get fresh sample todos.
+
+---
+
+## Understanding Docker Compose
+
+### Service Dependencies
+
+```yaml
+depends_on:
+  mongodb:
+    condition: service_healthy
+```
+
+**What this does:**
+
+- WebApp won’t start until MongoDB is healthy
+- Prevents connection errors on startup
+- Uses health check to determine readiness
+
+### Networks
+
+```yaml
+networks:
+  - todo-network
+```
+
+**What this does:**
+
+- All services join `todo-network`
+- Containers can reach each other by service name
+- Example: `mongodb://mongodb:27017` (not `localhost`)
+
+### Volumes
+
+```yaml
+volumes:
+  - mongodb-data:/data/db
+```
+
+**What this does:**
+
+- Named volume `mongodb-data` persists between restarts
+- Mounted at `/data/db` inside container (MongoDB data directory)
+- Survives `docker compose down` (but not `docker compose down -v`)
+
+### Port Mapping
+
+```yaml
+ports:
+  - "8080:8080"
+```
+
+**Format:** `HOST:CONTAINER`
+
+- Host machine port 8080 → Container port 8080
+- Access from browser: `localhost:8080`
+
+---
+
+## Troubleshooting
+
+### WebApp Can’t Connect to MongoDB
+
+**Symptoms:**
+
+- App crashes on startup
+- Error: “Unable to connect to MongoDB”
+
+**Check:**
+
+```bash
+# MongoDB logs
+docker compose logs mongodb
+
+# WebApp logs
+docker compose logs webapp
+```
+
+**Common causes:**
+
+1. **Wrong hostname:** Must use `mongodb`, not `localhost`
+2. **Container not in same network:** Check `docker-compose.yml`
+3. **MongoDB not ready:** Use health checks in `depends_on`
+
+**Solution:**
+
+Ensure environment variables are correct:
+
+```yaml
+environment:
+  MONGODB_HOST: mongodb  # Service name, not localhost!
+```
+
+### Port Already in Use
+
+**Symptoms:**
+
+- Error: “Bind for 0.0.0.0:8080 failed: port is already allocated”
+
+**Solution:**
+
+Either stop the conflicting service or change the port:
+
+```yaml
+ports:
+  - "8090:8080"  # Use 8090 on host instead
+```
+
+Then access at `http://localhost:8090`
+
+### Init Script Doesn’t Run
+
+**Symptoms:**
+
+- No sample todos
+- Database is empty
+
+**Cause:** Init scripts only run on first creation of the database.
+
+**Solution:**
+
+Delete the volume and recreate:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+### Changes Not Reflecting
+
+**Symptoms:**
+
+- Code changes don’t show up
+
+**Solution:**
+
+Rebuild the image:
+
+```bash
+docker compose up -d --build webapp
+```
+
+Or clear Docker build cache:
+
+```bash
+docker compose build --no-cache webapp
+docker compose up -d webapp
+```
+
+---
+
+## Cleanup
+
+### Stop Services (Keep Data)
+
+```bash
+docker compose stop
+```
+
+**Resume later:**
+
+```bash
+docker compose start
+```
+
+### Stop and Remove Containers (Keep Data)
+
+```bash
+docker compose down
+```
+
+**Data persists in volumes**
+
+### Remove Everything (Including Data)
+
+```bash
+# Remove containers, networks, and volumes
+docker compose down -v
+
+# Remove built images
+docker rmi webapp:latest
+```
+
+---
+
+## Summary
+
+**What you built:**
+
+- ✅ Full-stack Todo application (frontend + backend + database)
+- ✅ RESTful API with ASP.NET Core Minimal API
+- ✅ Modern responsive web UI with vanilla JavaScript
+- ✅ MongoDB for data persistence
+- ✅ Mongo Express for database inspection
+- ✅ Docker Compose orchestration
+- ✅ Data persistence with named volumes
+- ✅ Container networking and health checks
+
+**Technologies used:**
+
+- **Backend:** ASP.NET Core 8.0 (C#)
+- **Frontend:** HTML, CSS, JavaScript (vanilla)
+- **Database:** MongoDB
+- **Admin UI:** Mongo Express
+- **Containerization:** Docker & Docker Compose
+
+**Skills learned:**
+
+1. **ASP.NET Core Minimal APIs** - Simple, modern API development
+2. **MongoDB C# Driver** - Document database integration
+3. **Docker Compose** - Multi-container orchestration
+4. **Container networking** - Service-to-service communication
+5. **Volume management** - Data persistence
+6. **Health checks** - Startup dependencies
+7. **Environment variables** - Configuration management
+
+---
+
+## Next Steps
+
+**You now have a working full-stack application running locally!**
+
+When you’re ready, you can:
+
+- Deploy to a cloud platform
+- Add more features (authentication, search, categories)
+- Scale with container orchestration
+
+---
+
+## Congratulations! 🎉
+
+You’ve built a complete full-stack application with:
+
+- Modern API patterns
+- NoSQL database
+- Container orchestration
+- Local development workflow
+
+This is the foundation for deploying to production environments!
+
+---
+
+**Happy Coding! 🚀**
