@@ -1,0 +1,22 @@
+# I todo-app/ mappen
+cat > .gitignore << 'EOF'
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# Docker
+.dockerignore
+
+# VS Code
+.vscode/
+.vs/
+
+# MongoDB data (om du kör lokalt utan Docker)
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
+EOF
