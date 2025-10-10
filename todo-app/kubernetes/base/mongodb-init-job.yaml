@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-init
+  namespace: todo-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: mongo-init
+        image: mongo:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          sleep 10
+          mongosh mongodb-service:27017/ToDoAppDb --eval '
+            db.TodoItems.insertMany([
+              {
+                "Id": 1,
+                "Name": "Learn Kubernetes",
+                "IsComplete": false
+              },
+              {
+                "Id": 2,
+                "Name": "Deploy MongoDB",
+                "IsComplete": true
+              }
+            ]);
+            print("Database initialized successfully!");
+          '          
+      restartPolicy: OnFailure
+  backoffLimit: 4
