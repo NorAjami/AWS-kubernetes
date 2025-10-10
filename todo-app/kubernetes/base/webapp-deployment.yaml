@@ -1,0 +1,51 @@
+# Service for WebApp
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-webapp-service
+  namespace: todo-app
+  labels:
+    app: todo-webapp
+spec:
+  type: LoadBalancer  # Default - will be overridden for docker-desktop
+  selector:
+    app: todo-webapp
+  ports:
+  - port: 80
+    targetPort: 8080
+
+---
+# WebApp Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-webapp
+  namespace: todo-app
+  labels:
+    app: todo-webapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: todo-webapp
+  template:
+    metadata:
+      labels:
+        app: todo-webapp
+    spec:
+      containers:
+      - name: webapp
+        image: todo-app:latest  # Placeholder - replaced by overlay
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: webapp-config
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
