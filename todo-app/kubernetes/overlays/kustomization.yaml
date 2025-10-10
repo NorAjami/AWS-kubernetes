@@ -1,0 +1,46 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: todo-app
+
+resources:
+  - ../../base
+  - storageclass.yaml
+
+# Use YOUR Docker Hub image
+images:
+  - name: todo-app
+    newName: norajami/todo-app
+    newTag: latest
+
+# Patch MongoDB to use EKS StorageClass and add AWS LoadBalancer annotations
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: StatefulSet
+      name: mongodb
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: ebs-sc      
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: todo-webapp-service
+        namespace: todo-app
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      spec:
+        type: LoadBalancer      
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: mongo-express-service
+        namespace: todo-app
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      spec:
+        type: LoadBalancer
