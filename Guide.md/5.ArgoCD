@@ -411,18 +411,20 @@ http://<mongo-express-url>
 
 ---
 
-## 🎯 Steg 7: GitOps Magic - Testa Auto-Sync!
+# 🎯 Steg 7: GitOps Magic - Testa Auto-Sync!
 
 Nu kommer det coola! Vi ändrar något i Git och ArgoCD deployar automatiskt!
 
-### 7.1 Aktivera Auto-Sync
+---
+
+## 7.1 Aktivera Auto-Sync
 
 **I ArgoCD UI:**
 
-1. Klicka på **"todo-app"** application
-2. Klicka **"APP DETAILS"** (top left)
+1. Klicka på **"todo-app"** application (om du inte redan är där)
+2. Klicka **"APP DETAILS"** (top left, bredvid app-namnet)
 3. Klicka **"ENABLE AUTO-SYNC"**
-4. Checka dessa options:
+4. En dialog öppnas - checka dessa options:
    - ✅ **PRUNE RESOURCES** (ta bort resurser som inte finns i Git)
    - ✅ **SELF HEAL** (återställ manuella ändringar)
 5. Klicka **"OK"**
@@ -431,54 +433,67 @@ Nu kommer det coola! Vi ändrar något i Git och ArgoCD deployar automatiskt!
 
 ---
 
-### 7.2 Testa GitOps - Ändra Replicas
+## 7.2 Testa GitOps - Ändra Replicas från 3 → 4
 
-**Vi testar genom att ändra antal webapp-replicas från 2 → 3!**
+**Vi testar genom att ändra antal webapp-replicas från 3 → 4!**
 
-```bash
-cd ~/AWS-Kubernetes
+### Via GitHub Web Interface:
 
-# Öppna filen
-code todo-app/kubernetes/overlays/eks-dockerhub/kustomization.yaml
+1. **Gå till din GitHub:** `https://github.com/DITT-NAMN/AWS-kubernetes`
 
-# Lägg till denna längst ner under type: loadBalancer
+2. **Navigera till:** `todo-app/kubernetes/overlays/eks-dockerhub/kustomization.yaml`
+
+3. **Klicka "Edit" (penna-ikonen)** uppe till höger
+
+4. **Scrolla ner till patches-sektionen** och lägg till denna patch längst ner (efter LoadBalancer patches):
 
 ```yaml
- - target:
+  - target:
       kind: Deployment
       name: todo-webapp
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 3
+        value: 4
 ```
 
-# Commit
-git add .
-git commit -m "Add replica patch: scale webapp to 3 replicas"
-git push
-```
+5. **Scrolla ner → "Commit changes"**
+6. **Commit message:** `Scale webapp to 4 replicas for GitOps demo`
+7. **Klicka "Commit changes"**
 
 ---
 
-### 7.3 Övervaka ArgoCD
+## 7.3 Övervaka ArgoCD Auto-Sync
 
 **Efter du committat:**
 
 **I ArgoCD UI:**
 
-1. **Vänta ~3 minuter** (ArgoCD polling interval)
-2. **Status ändras:** `Synced` → `OutOfSync`
-3. **ArgoCD detekterar ändringen** automatiskt
-4. **Auto-sync triggas** → `Syncing`
-5. **Deployment uppdateras** → `Synced` ✅
+1. **Vänta upp till ~3 minuter** (ArgoCD polling interval)
+   
+   **ELLER klicka "REFRESH" button** (cirkel-pil icon, top bar) för instant check
 
-**Alternativt: Manuell refresh**
-- Klicka **"REFRESH"** button (cirkel-pil) för instant check
+2. **Status ändras:**
+   - `Synced` → `OutOfSync` (ArgoCD detekterar Git-ändring)
+
+3. **Auto-sync triggas automatiskt:**
+   - Status: `OutOfSync` → `Syncing` 
+   - Du ser deployment uppdateras i resource tree
+
+4. **Efter ~30 sekunder:**
+   - Status: `Syncing` → `Synced` ✅
+   - Health: `Healthy` ✅
+
+5. **I resource tree:**
+   - Klicka på **"todo-webapp"** Deployment
+   - Du ser att replicas nu är 4
+   - En ny pod skapas
 
 ---
 
-### 7.4 Verifiera 3 pods
+## 7.4 Verifiera 4 Pods i Cluster
+
+**Öppna terminal:**
 
 ```bash
 kubectl get pods -n todo-app -l app=todo-webapp
@@ -487,24 +502,46 @@ kubectl get pods -n todo-app -l app=todo-webapp
 **Förväntat:**
 ```
 NAME                           READY   STATUS    RESTARTS   AGE
-todo-webapp-xxx                1/1     Running   0          10m
-todo-webapp-yyy                1/1     Running   0          10m
-todo-webapp-zzz                1/1     Running   0          1m   ← NY POD!
+todo-webapp-xxx                1/1     Running   0          25m
+todo-webapp-yyy                1/1     Running   0          25m
+todo-webapp-zzz                1/1     Running   0          10m
+todo-webapp-aaa                1/1     Running   0          1m   ← NY POD!
 ```
 
-**3 pods istället för 2!** 🎉
+**4 pods istället för 3!** 🎉
+
+---
+
+## 🎊 Detta demonstrerar GitOps Workflow:
+
+```
+1. Developer → Git commit (du ändrade kustomization.yaml)
+           ↓
+2. ArgoCD polls Git (var 3:e minut eller manual refresh)
+           ↓
+3. ArgoCD detekterar change (OutOfSync status)
+           ↓
+4. Auto-sync triggas (Syncing...)
+           ↓
+5. Kubernetes uppdateras (ny pod skapas)
+           ↓
+6. Status: Synced ✅ (Git = Cluster)
+```
+
+**Git är källan till sanning! Ingen kubectl apply behövdes!** ✨
 
 ---
 
 ## 🔄 Steg 8: Testa Self-Heal
 
-**Self-heal = ArgoCD återställer manuella ändringar!**
+**Self-heal = ArgoCD återställer manuella ändringar automatiskt!**
 
-### 8.1 Gör manuell ändring i cluster
+### 8.1 Gör Manuell Ändring i Cluster
+
+Låt oss manuellt scale deployment till 6 replicas (utanför Git):
 
 ```bash
-# Scale manuellt till 5 replicas
-kubectl scale deployment todo-webapp -n todo-app --replicas=5
+kubectl scale deployment todo-webapp -n todo-app --replicas=6
 ```
 
 **Verifiera:**
@@ -512,70 +549,66 @@ kubectl scale deployment todo-webapp -n todo-app --replicas=5
 kubectl get pods -n todo-app -l app=todo-webapp
 ```
 
-**Du ser 5 pods!**
+**Du ser 6 pods!** (2 extra pods skapade manuellt)
 
 ---
 
-### 8.2 Vänta på Self-Heal
+### 8.2 Vänta på Self-Heal (Drift Detection)
 
 **I ArgoCD UI:**
 
-1. **Status ändras:** `Synced` → `OutOfSync` (drift detected!)
-2. **Efter ~30 sekunder:** Self-heal kickar in
-3. **ArgoCD syncar tillbaka till desired state** (3 replicas från Git)
-4. **Status:** `OutOfSync` → `Synced` ✅
+1. **Status ändras omedelbart:**
+   - `Synced` → `OutOfSync` 
+   - ArgoCD detekterar att cluster state != Git state (drift!)
+
+2. **Efter ~30 sekunder:**
+   - Self-heal kickar in automatiskt
+   - Status: `OutOfSync` → `Syncing`
+   - ArgoCD syncar tillbaka till desired state (4 replicas från Git)
+
+3. **Efter ~1 minut:**
+   - Status: `Syncing` → `Synced` ✅
+   - Cluster återställd till Git state
 
 ---
 
-### 8.3 Verifiera rollback
+### 8.3 Verifiera Rollback till 4 Replicas
 
 ```bash
 kubectl get pods -n todo-app -l app=todo-webapp
 ```
 
-**Förväntat:**
+**Under self-heal:**
 ```
 NAME                           READY   STATUS        RESTARTS   AGE
-todo-webapp-xxx                1/1     Running       0          15m
-todo-webapp-yyy                1/1     Running       0          15m
-todo-webapp-zzz                1/1     Running       0          5m
-todo-webapp-aaa                1/1     Terminating   0          1m  ← Tas bort
+todo-webapp-xxx                1/1     Running       0          30m
+todo-webapp-yyy                1/1     Running       0          30m
+todo-webapp-zzz                1/1     Running       0          15m
+todo-webapp-aaa                1/1     Running       0          5m
 todo-webapp-bbb                1/1     Terminating   0          1m  ← Tas bort
+todo-webapp-ccc                1/1     Terminating   0          1m  ← Tas bort
 ```
 
-**Efter 30s:**
+**Efter 1 minut:**
 ```
 NAME                           READY   STATUS    RESTARTS   AGE
-todo-webapp-xxx                1/1     Running   0          15m
-todo-webapp-yyy                1/1     Running   0          15m
-todo-webapp-zzz                1/1     Running   0          5m
+todo-webapp-xxx                1/1     Running   0          30m
+todo-webapp-yyy                1/1     Running   0          30m
+todo-webapp-zzz                1/1     Running   0          15m
+todo-webapp-aaa                1/1     Running   0          5m
 ```
 
-**Tillbaka till 3 replicas!** 🔄
-
-**Detta är GitOps: Git är källan till sanning!** ✨
+**Tillbaka till 4 replicas!** 🔄
 
 ---
 
-## 🎊 Detta visar:
+## 🎯 Vad Self-Heal demonstrerar:
 
-- ✅ **GitOps workflow:** Commit → Auto-deploy
-- ✅ **Auto-sync:** ArgoCD detekterar Git-ändringar
-- ✅ **Self-heal:** Manuella ändringar återställs
-- ✅ **Git = Source of Truth:** Clustern matchar Git
+- ✅ **Drift Detection:** ArgoCD upptäcker manuella ändringar
+- ✅ **Automatic Reconciliation:** Återställer till Git state
+- ✅ **Git as Source of Truth:** Cluster måste matcha Git
+- ✅ **No Manual Intervention:** Inget manuellt arbete behövs
+
+**Detta är kärnan i GitOps: Git styr allt!** 🛡️
 
 ---
-
-## ✅ Status Check
-
-**Har du:**
-1. ✅ Todo-app fungerande i webbläsare?
-2. ✅ Ändrat replicas i Git (2 → 3)?
-3. ✅ Sett ArgoCD auto-synca?
-4. ✅ Testat self-heal (5 → 3 replicas)?
-
-**Om JA → Tutorial KLAR!** 🎉
-
-**Vill du fortsätta med mer avancerade features?** (Rollback, monitoring, etc.)
-
-**Eller vill du börja dokumentera denna tutorial?** 📝
