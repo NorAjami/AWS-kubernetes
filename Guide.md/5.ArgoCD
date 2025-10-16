@@ -1,0 +1,581 @@
+# 🚀 ArgoCD!
+
+## 📋 Steg 0: Verifiera Prerequisites
+
+```bash
+# Kolla nodes
+kubectl get nodes
+
+# Kolla kubectl version
+kubectl version --client
+```
+---
+
+## 🎯 Steg 1: Install ArgoCD
+
+### 1.1 Skapa ArgoCD Namespace
+
+```bash
+kubectl create namespace argocd
+```
+
+**Förväntat:**
+```
+namespace/argocd created
+```
+
+---
+
+### 1.2 Installera ArgoCD
+
+```bash
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+**Detta installerar:**
+- ArgoCD API Server
+- Repository Server (ansluter till Git)
+- Application Controller (synkar resurser)
+- Redis (caching)
+- Dex (SSO, optional)
+- Web UI
+
+**Output blir LÅNG** (massa `created`):
+```
+customresourcedefinition.apiextensions.k8s.io/applications.argoproj.io created
+customresourcedefinition.apiextensions.k8s.io/applicationsets.argoproj.io created
+customresourcedefinition.apiextensions.k8s.io/appprojects.argoproj.io created
+serviceaccount/argocd-application-controller created
+serviceaccount/argocd-applicationset-controller created
+...
+(massa rader)
+...
+deployment.apps/argocd-server created
+```
+
+**Detta tar ~30 sekunder.**
+
+---
+
+### 1.3 Verifiera Installation
+
+```bash
+# Kolla alla pods
+kubectl get pods -n argocd
+```
+
+**Du kommer se:**
+```
+NAME                                               READY   STATUS
+argocd-application-controller-0                    0/1     ContainerCreating
+argocd-applicationset-controller-xxx               0/1     ContainerCreating
+argocd-dex-server-xxx                              0/1     ContainerCreating
+argocd-notifications-controller-xxx                0/1     ContainerCreating
+argocd-redis-xxx                                   0/1     ContainerCreating
+argocd-repo-server-xxx                             0/1     ContainerCreating
+argocd-server-xxx                                  0/1     ContainerCreating
+```
+
+**Vänta tills alla är Running:**
+
+```bash
+kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
+```
+
+**Detta tar 2-3 minuter.**
+
+**När det är klart:**
+```
+pod/argocd-application-controller-0 condition met
+pod/argocd-applicationset-controller-xxx condition met
+...
+```
+
+---
+
+# 🌐 Steg 2: Access ArgoCD Web UI
+
+---
+
+## 2.1 Exponera ArgoCD Server
+
+Vi använder **LoadBalancer** (som din Todo-app) för att få extern åtkomst:
+
+```bash
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+```
+
+**Förväntat:**
+```
+service/argocd-server patched
+```
+
+---
+
+## 2.2 Vänta på Load Balancer
+
+```bash
+kubectl get svc argocd-server -n argocd -w
+```
+
+**Initialt:**
+```
+NAME            TYPE           EXTERNAL-IP   PORT(S)
+argocd-server   LoadBalancer   <pending>     80:xxxxx/TCP,443:xxxxx/TCP
+```
+
+**Efter 2-3 minuter:**
+```
+NAME            TYPE           EXTERNAL-IP                               PORT(S)
+argocd-server   LoadBalancer   abc123-xyz.elb.eu-west-1.amazonaws.com   80:xxxxx/TCP,443:xxxxx/TCP
+```
+
+**Tryck Ctrl+C när du ser EXTERNAL-IP!**
+
+---
+
+## 2.3 Hämta ArgoCD URL
+
+```bash
+kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' && echo
+```
+
+**Output:** Något som `abc123-xyz.elb.eu-west-1.amazonaws.com`
+
+**Kopiera denna URL!** 📋
+
+---
+
+## 2.4 Hämta Admin Password
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
+```
+
+**Output:** En lång sträng, typ: `TkX9vR2zQ8yHn4Wp`
+
+**Kopiera detta lösenord!** 📋
+
+---
+
+## 2.5 Öppna ArgoCD UI i webbläsare
+
+1. **Öppna ny flik i webbläsaren**
+2. **Klistra in:** `https://<din-url-från-steg-2.3>`
+   
+   **OBS: HTTPS** (inte http!)
+
+**Exempel:**
+```
+https://abc123-xyz.elb.eu-west-1.amazonaws.com
+```
+
+3. **Du får säkerhetsvarning** (self-signed certificate)
+   - Klicka **"Advanced"** 
+   - Klicka **"Proceed to ... (unsafe)"** eller **"Accept the Risk and Continue"**
+
+---
+
+## 2.6 Logga in
+
+**Login-skärm:**
+- **Username:** `admin`
+- **Password:** [Lösenordet från steg 2.4]
+
+**Klicka "SIGN IN"**
+
+---
+
+## 🎉 Du ska nu se ArgoCD Dashboard!
+
+**Dashboard visar:**
+- "Applications" (tom just nu)
+- "+ NEW APP" knapp (vänster)
+- "Settings" länk (vänster)
+
+---
+
+## 2.7 Byt Admin Password (Rekommenderat)
+
+1. Klicka på **ikonen med person** (top right)
+2. Välj **"User Info"**
+3. Klicka **"UPDATE PASSWORD"**
+4. Fyll i:
+   - **Current password:** [Det långa från steg 2.4]
+   - **New password:** Välj något enklare att komma ihåg
+   - **Confirm new password:** Samma igen
+5. Klicka **"SAVE"**
+
+---
+
+## ✅ Status Check
+
+- ✅ Öppna ArgoCD UI i webbläsare
+- ✅ Logga in med admin + lösenord
+- ✅ Se tom dashboard med "+ NEW APP" knapp
+
+---
+
+# 🚀 Steg 4: Skapa ArgoCD Application för Todo-App
+4.1 Öppna ArgoCD UI
+Du ska redan vara inloggad. Om inte:
+https://<din-argocd-url>
+
+## 4.2 Skapa New Application
+
+Klicka "+ NEW APP" (top left)
+
+GENERAL:
+
+Application Name: todo-app
+Project Name: default
+Sync Policy: Manual (vi testar manuellt först)
+
+SOURCE:
+
+Repository URL: https://github.com/NorAjami/AWS-kubernetes
+Revision: HEAD (eller main)
+Path: todo-app/kubernetes/overlays/eks-dockerhub
+
+DESTINATION:
+
+Cluster URL: https://kubernetes.default.svc (ska vara pre-filled)
+Namespace: todo-app
+
+SYNC OPTIONS (optional, men bra):
+
+✅ AUTO-CREATE NAMESPACE (checka denna!)
+
+
+## 4.3 Skapa Application
+Scrolla upp och klicka "CREATE" (top of page)
+
+🎊 Nu ska du se:
+I Applications-listan:
+NAME      SYNC STATUS    HEALTH STATUS
+todo-app  OutOfSync      Missing
+Klicka på "todo-app" application för att se detaljer!
+
+👀 Vad ser du i Application-vyn?
+Du ska se ett resource tree med alla dina manifests:
+
+Namespace: todo-app
+StorageClass: ebs-sc
+StatefulSet: mongodb
+Services: mongodb-service, todo-webapp-service, mongo-express-service
+Deployments: todo-webapp, mongo-express
+ConfigMap: webapp-config
+Job: mongodb-init
+
+Status: Alla är OutOfSync (ännu inte deployed) gula/orange varnings-ikoner
+
+✅ Bekräfta:
+du ska se:
+
+✅ Application skapad i ArgoCD
+✅ Status "OutOfSync"
+✅ Resource tree med dina manifests
+
+# 🚀 Steg 5: Sync Application (Deploy!)
+
+Nu deployar vi till ditt cluster!
+
+## 5.1 Starta Sync
+I ArgoCD UI:
+
+Klicka "SYNC" button (top right, blå knapp)
+Sync options visas:
+
+Du ser alla resurser som kommer skapas
+Scroll igenom listan
+
+
+Klicka "SYNCHRONIZE" (längst ner)
+
+
+## 5.2 Övervaka Deployment
+ArgoCD kommer:
+
+✅ Skapa namespace todo-app
+✅ Skapa StorageClass ebs-sc
+✅ Deploya MongoDB StatefulSet
+⏳ Vänta på EBS volume provisioning
+✅ Starta MongoDB pod
+✅ Köra mongodb-init Job (seed database)
+✅ Deploya todo-webapp (2 replicas)
+✅ Deploya mongo-express
+✅ Skapa LoadBalancer services
+
+Du ser real-time progress i resource tree:
+
+Gula ikoner → Gröna checkmarks ✅
+"Progressing" → "Healthy"
+"Syncing" → "Synced"
+
+
+⏱️ Hur lång tid tar det?
+Timeline:
+
+0-30s: Namespace, StorageClass, ConfigMap skapas
+30s-2min: MongoDB StatefulSet + EBS volume
+2-3min: MongoDB-init Job completes
+3-4min: WebApp pods startar
+4-6min: LoadBalancers provisions
+
+TOTAL: ~5-6 minuter
+
+👀 Vad ska du titta efter?
+Resource tree uppdateras i real-time:
+Initialt:
+StorageClass: Synced ✅, Healthy ✅
+StatefulSet: Syncing 🔄, Progressing ⏳
+PVC: Syncing 🔄, Pending ⏳
+Efter ~2 min:
+StatefulSet: Synced ✅, Healthy ✅
+PVC: Synced ✅, Bound ✅
+Pods: Running ✅
+Efter ~5 min:
+Services: Synced ✅, Healthy ✅ (LoadBalancers med EXTERNAL-IP)
+
+Din Todo-app är deployed via GitOps!
+
+Allt grönt = Perfekt deployment! ✅
+
+
+---
+
+## 🌐 Steg 6: Verifiera & Accessa Applikationen
+
+### 6.1 Verifiera i Cluster
+
+**Öppna terminal:**
+
+```bash
+# Kolla alla resurser
+kubectl get all -n todo-app
+```
+
+**Förväntat:**
+```
+NAME                              READY   STATUS      RESTARTS   AGE
+pod/mongodb-0                     1/1     Running     0          5m
+pod/mongodb-init-xxx              0/1     Completed   0          5m
+pod/mongo-express-xxx             1/1     Running     0          4m
+pod/todo-webapp-xxx               1/1     Running     0          4m
+pod/todo-webapp-yyy               1/1     Running     0          4m
+
+NAME                            TYPE           EXTERNAL-IP
+service/mongodb-service         ClusterIP      None
+service/mongo-express-service   LoadBalancer   abc.elb.eu-west-1.amazonaws.com
+service/todo-webapp-service     LoadBalancer   xyz.elb.eu-west-1.amazonaws.com
+```
+
+---
+
+### 6.2 Hämta Application URLs
+
+```bash
+# Todo App URL
+kubectl get svc todo-webapp-service -n todo-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' && echo
+
+# Mongo Express URL
+kubectl get svc mongo-express-service -n todo-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' && echo
+```
+
+**Kopiera båda URLerna!** 📋
+
+---
+
+### 6.3 Öppna i webbläsare
+
+**Todo App:**
+```
+http://<todo-webapp-url>
+```
+
+**Mongo Express:**
+```
+http://<mongo-express-url>
+```
+
+**OBS: HTTP** (inte https denna gång!)
+
+---
+
+## ✅ Fungerar applikationen?
+
+**Testa:**
+1. ✅ Todo-app visar UI med 2 sample todos?
+2. ✅ Kan du lägga till ny todo?
+3. ✅ Mongo Express visar databasen?
+
+---
+
+## 🎯 Steg 7: GitOps Magic - Testa Auto-Sync!
+
+Nu kommer det coola! Vi ändrar något i Git och ArgoCD deployar automatiskt!
+
+### 7.1 Aktivera Auto-Sync
+
+**I ArgoCD UI:**
+
+1. Klicka på **"todo-app"** application
+2. Klicka **"APP DETAILS"** (top left)
+3. Klicka **"ENABLE AUTO-SYNC"**
+4. Checka dessa options:
+   - ✅ **PRUNE RESOURCES** (ta bort resurser som inte finns i Git)
+   - ✅ **SELF HEAL** (återställ manuella ändringar)
+5. Klicka **"OK"**
+
+**Nu syncar ArgoCD automatiskt var 3:e minut!** 🔄
+
+---
+
+### 7.2 Testa GitOps - Ändra Replicas
+
+**Vi testar genom att ändra antal webapp-replicas från 2 → 3!**
+
+```bash
+cd ~/AWS-Kubernetes
+
+# Öppna filen
+code todo-app/kubernetes/overlays/eks-dockerhub/kustomization.yaml
+
+# Lägg till denna längst ner under type: loadBalancer
+
+```yaml
+ - target:
+      kind: Deployment
+      name: todo-webapp
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+```
+
+# Commit
+git add .
+git commit -m "Add replica patch: scale webapp to 3 replicas"
+git push
+```
+
+---
+
+### 7.3 Övervaka ArgoCD
+
+**Efter du committat:**
+
+**I ArgoCD UI:**
+
+1. **Vänta ~3 minuter** (ArgoCD polling interval)
+2. **Status ändras:** `Synced` → `OutOfSync`
+3. **ArgoCD detekterar ändringen** automatiskt
+4. **Auto-sync triggas** → `Syncing`
+5. **Deployment uppdateras** → `Synced` ✅
+
+**Alternativt: Manuell refresh**
+- Klicka **"REFRESH"** button (cirkel-pil) för instant check
+
+---
+
+### 7.4 Verifiera 3 pods
+
+```bash
+kubectl get pods -n todo-app -l app=todo-webapp
+```
+
+**Förväntat:**
+```
+NAME                           READY   STATUS    RESTARTS   AGE
+todo-webapp-xxx                1/1     Running   0          10m
+todo-webapp-yyy                1/1     Running   0          10m
+todo-webapp-zzz                1/1     Running   0          1m   ← NY POD!
+```
+
+**3 pods istället för 2!** 🎉
+
+---
+
+## 🔄 Steg 8: Testa Self-Heal
+
+**Self-heal = ArgoCD återställer manuella ändringar!**
+
+### 8.1 Gör manuell ändring i cluster
+
+```bash
+# Scale manuellt till 5 replicas
+kubectl scale deployment todo-webapp -n todo-app --replicas=5
+```
+
+**Verifiera:**
+```bash
+kubectl get pods -n todo-app -l app=todo-webapp
+```
+
+**Du ser 5 pods!**
+
+---
+
+### 8.2 Vänta på Self-Heal
+
+**I ArgoCD UI:**
+
+1. **Status ändras:** `Synced` → `OutOfSync` (drift detected!)
+2. **Efter ~30 sekunder:** Self-heal kickar in
+3. **ArgoCD syncar tillbaka till desired state** (3 replicas från Git)
+4. **Status:** `OutOfSync` → `Synced` ✅
+
+---
+
+### 8.3 Verifiera rollback
+
+```bash
+kubectl get pods -n todo-app -l app=todo-webapp
+```
+
+**Förväntat:**
+```
+NAME                           READY   STATUS        RESTARTS   AGE
+todo-webapp-xxx                1/1     Running       0          15m
+todo-webapp-yyy                1/1     Running       0          15m
+todo-webapp-zzz                1/1     Running       0          5m
+todo-webapp-aaa                1/1     Terminating   0          1m  ← Tas bort
+todo-webapp-bbb                1/1     Terminating   0          1m  ← Tas bort
+```
+
+**Efter 30s:**
+```
+NAME                           READY   STATUS    RESTARTS   AGE
+todo-webapp-xxx                1/1     Running   0          15m
+todo-webapp-yyy                1/1     Running   0          15m
+todo-webapp-zzz                1/1     Running   0          5m
+```
+
+**Tillbaka till 3 replicas!** 🔄
+
+**Detta är GitOps: Git är källan till sanning!** ✨
+
+---
+
+## 🎊 Detta visar:
+
+- ✅ **GitOps workflow:** Commit → Auto-deploy
+- ✅ **Auto-sync:** ArgoCD detekterar Git-ändringar
+- ✅ **Self-heal:** Manuella ändringar återställs
+- ✅ **Git = Source of Truth:** Clustern matchar Git
+
+---
+
+## ✅ Status Check
+
+**Har du:**
+1. ✅ Todo-app fungerande i webbläsare?
+2. ✅ Ändrat replicas i Git (2 → 3)?
+3. ✅ Sett ArgoCD auto-synca?
+4. ✅ Testat self-heal (5 → 3 replicas)?
+
+**Om JA → Tutorial KLAR!** 🎉
+
+**Vill du fortsätta med mer avancerade features?** (Rollback, monitoring, etc.)
+
+**Eller vill du börja dokumentera denna tutorial?** 📝

@@ -44,3 +44,10 @@ patches:
           service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
       spec:
         type: LoadBalancer
+  - target:
+      kind: Deployment
+      name: todo-webapp
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
