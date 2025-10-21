@@ -1,0 +1,17 @@
+# ingress-nginx-values.yaml
+controller:
+  # The kind of deployment to use
+  kind: DaemonSet
+
+  # Configuration for the controller's service
+  service:
+    # Key annotations for AWS auto-provisioning
+    annotations:
+      # Specifies the type of AWS load balancer to create. "nlb" is for Network Load Balancer.
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+
+      # Optional: Sets the NLB to be internet-facing. Use "internal" for a private NLB.
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+
+    # Set externalTrafficPolicy to Local to preserve the source IP of the client
+    externalTrafficPolicy: Local
